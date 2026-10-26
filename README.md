@@ -1,149 +1,197 @@
-# Roomify
+﻿# Roomify — Interactive 2D Room Design Platform
 
-Roomify is an interactive 2D room interior-design application built with React and TypeScript, with a small Express API and SQLite database. It lets users create room concepts, place furniture, customize layouts, save designs locally, and export the finished canvas as PNG.
+Roomify is a responsive room-design application that lets users create and customize 2D room layouts, arrange furniture, edit designs, and export room canvases as PNG images.
 
 ## Features
 
-- Landing page with product-style presentation
-- Create a room design
-- Room type selection
-- Interior style selection
-- Built-in room backgrounds
-- Upload a local room image
-- Interactive Konva 2D canvas
-- Add furniture and decor
-- Drag, resize and rotate elements
-- Select and delete elements
-- Change furniture colors
-- Duplicate elements
-- Save and edit designs
-- Delete saved designs
-- localStorage persistence
+- Create room designs with room types and interior styles
+- Interactive 2D editor built with React Konva
+- Add, move, resize, rotate, duplicate, recolor, and delete furniture
+- Upload room backgrounds and customize layouts
+- Save, retrieve, update, and delete designs through a REST API
+- PostgreSQL persistence using JSONB
 - PNG export
-- Responsive desktop, tablet and mobile editor
-- Accessible labels, focus states and friendly empty/error states
-- Netlify SPA redirect configuration
+- Responsive interface and accessible UI controls
 
 ## Tech Stack
 
-- React
-- TypeScript
-- Vite
+**Frontend**
+- React, TypeScript, Vite
 - Tailwind CSS
 - React Router
-- react-konva / Konva
-- lucide-react
-- Node.js + Express
-- SQLite (better-sqlite3)
+- Konva and react-konva
 
-The backend supports basic design CRUD operations. There is no login/authentication system, keeping the project intentionally small.
+**Backend**
+- Node.js and Express
+- PostgreSQL
+- `pg` connection pool
+- JSON REST API
+
+**Testing**
+- Vitest
+- Supertest
+- In-memory database mock for isolated API tests
+
+**Deployment**
+- Netlify frontend
+- Render backend and PostgreSQL database
+
+## Architecture
+
+The frontend sends HTTP requests to the Express API. The backend validates design data and stores each complete design as JSONB in PostgreSQL.
+
+```text
+React + TypeScript frontend
+          |
+          | HTTP / JSON
+          v
+     Express REST API
+          |
+          | pg connection pool
+          v
+      PostgreSQL
+```
 
 ## Project Structure
 
 ```text
 src/
-├── components/
-│   ├── Navbar.tsx
-│   ├── Button.tsx
-│   ├── DesignCard.tsx
-│   ├── FurniturePanel.tsx
-│   ├── RoomCanvas.tsx
-│   ├── PropertiesPanel.tsx
-│   ├── ColorPicker.tsx
-│   └── EmptyState.tsx
-├── pages/
-│   ├── Home.tsx
-│   ├── Dashboard.tsx
-│   ├── NewDesign.tsx
-│   └── DesignEditor.tsx
-├── data/
-│   ├── furniture.ts
-│   └── roomStyles.ts
-├── hooks/
-│   └── useDesign.ts
-├── services/
-│   └── localStorage.ts  # API client (legacy filename)
-├── types/
-│   └── index.ts
-├── App.tsx
-├── main.tsx
-└── index.css
+  components/
+  pages/
+  data/
+  hooks/
+  services/
+  types/
+server/
+  app.js
+  index.js
+tests/
+  api.test.js
+public/
+netlify.toml
 ```
 
-## Installation
+## Requirements
 
-Use Node.js 18 or newer. From the project root, install dependencies:
+- Node.js 18 or newer
+- npm
+- A PostgreSQL database
+
+## Local Setup
+
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-## Run locally
+Configure the `DATABASE_URL` environment variable with your PostgreSQL connection string. Do not commit credentials to Git.
 
-Open **two terminals** in the project folder.
+PowerShell example for the current terminal session:
 
-Terminal 1 — start the backend:
+```powershell
+$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE"
+```
+
+Replace the example with your actual connection string. For local development, use a database you control and have permission to access.
+
+Start the backend:
 
 ```bash
 npm run server
 ```
 
-The API runs at `http://localhost:4000`. You can check it at `http://localhost:4000/api/health`.
+The backend creates the `designs` table on startup if it does not exist.
 
-Terminal 2 — start the React frontend:
+In another terminal, start the frontend:
 
 ```bash
 npm run dev
 ```
 
-Open the Vite URL shown in the terminal (usually `http://localhost:5173`).
+Open the local Vite URL printed in the terminal, usually `http://localhost:5173`.
 
-You can also run both at once with `npm run dev:all`.
+The frontend uses `VITE_API_URL` when configured; otherwise, its API client defaults to `http://localhost:4000/api`.
 
-## Backend API
+## Environment Variables
 
-- `GET /api/designs` — list saved designs
-- `GET /api/designs/:id` — fetch one design
-- `POST /api/designs` — create a design
-- `PUT /api/designs/:id` — update a design
-- `DELETE /api/designs/:id` — delete a design
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string; required by the backend |
+| `CLIENT_ORIGIN` | Optional additional allowed frontend origin |
+| `PORT` | Backend port; defaults to `4000` |
+| `NODE_ENV` | Enables production PostgreSQL SSL configuration when set to `production` |
+| `VITE_API_URL` | Frontend API base URL, such as `https://your-api.example.com/api` |
 
-Designs are stored in `server/roomify.db`, created automatically when the backend starts. The uploaded room image and canvas preview are stored as data URLs inside the design record, so use reasonable image sizes.
+Never expose database credentials in frontend variables or commit secrets to the repository.
 
-## Build
+## REST API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/health` | Checks API and database connectivity |
+| GET | `/api/designs` | Lists saved designs |
+| GET | `/api/designs/:id` | Retrieves a design by ID |
+| POST | `/api/designs` | Creates a design |
+| PUT | `/api/designs/:id` | Updates a design |
+| DELETE | `/api/designs/:id` | Deletes a design |
+
+Design creation requires a non-empty `id`, a non-empty `name`, and an `elements` array. Duplicate IDs return HTTP 409; missing designs return HTTP 404.
+
+## Automated Tests
+
+Run the API test suite:
+
+```bash
+npm test
+```
+
+Run tests in watch mode:
+
+```bash
+npm run test:watch
+```
+
+The test suite checks health, create/list, retrieve-by-ID, update, delete, invalid design data, duplicate IDs, and missing designs. Tests use an in-memory mock and do not modify the production database.
+
+## Production Build
+
+Build the frontend:
 
 ```bash
 npm run build
 ```
 
-The production output is generated in `dist/`.
+The generated static site is written to `dist/`.
 
-## Netlify deployment
+Check backend JavaScript syntax:
 
-This project includes:
-
-```text
-public/_redirects
+```bash
+node --check server/index.js
 ```
 
-with:
+## Deployment
 
-```text
-/* /index.html 200
-```
-
-This allows React Router routes such as `/dashboard` and `/design/:id` to work after a browser refresh.
-
-For Netlify, use:
+### Frontend — Netlify
 
 - Build command: `npm run build`
 - Publish directory: `dist`
+- Configure `VITE_API_URL` to point to the deployed backend API.
+- The Netlify configuration includes a single-page application redirect for client-side routes.
 
-## How persistence works
+### Backend — Render
 
-Roomify now sends the complete design object to the Express API, which stores it as JSON in a SQLite table. The database file is `server/roomify.db`.
+- Runtime: Node.js
+- Build command: `npm install`
+- Start command: `npm run server`
+- Set `DATABASE_URL` to the PostgreSQL database connection string.
+- Set `CLIENT_ORIGIN` to the deployed frontend origin if using a different frontend domain.
 
-Each design contains:
+The backend creates the database table at startup. A PostgreSQL database must be available for the service to start successfully.
+
+## Data Model
+
+Each design is stored as a JSONB document alongside its database ID and timestamps. Design data may contain fields such as:
 
 - `id`
 - `name`
@@ -153,27 +201,18 @@ Each design contains:
 - `elements`
 - `createdAt`
 - `updatedAt`
-- optional `preview`
+- `preview`
 
-The backend must be running to create, view, edit, or delete saved designs. Removing `server/roomify.db` removes the saved designs.
+Room images and previews may be embedded as data URLs. Large images can increase database and API payload sizes; object storage is a possible future improvement.
 
-## PNG export
+## Current Scope and Future Improvements
 
-The editor uses Konva's client-side canvas export (`Stage.toDataURL`) to generate a PNG. Nothing is uploaded to a server.
+The project currently has no authentication system. Other possible improvements include:
 
-## Future improvements
-
-- Undo/redo history
-- More furniture shapes and room templates
-- Snapping and alignment guides
-- Layer ordering
-- Multi-select
-- Better keyboard shortcuts
-- Optional backend synchronization
-- More advanced realistic furniture assets
-
-## Figma Design
-
-Roomify now includes a Figma-ready design handoff in the `figma/` directory. The boards cover the existing Landing, Dashboard, New Design, and Editor screens and use the same visual structure as the React application.
-
-Import the SVG boards into a Figma Design file and refine/annotate them as the UI source of truth. See `figma/README.md` and `figma/DESIGN-TOKENS.md` for the import workflow and design system.
+- User accounts and per-user design ownership
+- Undo and redo
+- Furniture layers and alignment guides
+- Image object storage
+- Pagination for large design collections
+- Additional integration tests against a dedicated test PostgreSQL database
+- Frontend code splitting to reduce bundle size

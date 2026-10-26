@@ -6,3 +6,10 @@ server/roomify.db-shm
 server/roomify.db-wal
 
 server/data/designs.json
+
+# Local Netlify folder
+.netlify
+
+# Local tooling and deployment state
+.agents/
+.netlify/
