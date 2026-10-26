@@ -1,115 +1,231 @@
 
 import express from "express";
 import cors from "cors";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import pg from "pg";
 
+const { Pool } = pg;
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "data");
-const dataFile = path.join(dataDir, "designs.json");
-
-fs.mkdirSync(dataDir, { recursive: true });
-
-if (!fs.existsSync(dataFile)) {
-  fs.writeFileSync(dataFile, "[]", "utf8");
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL environment variable is required");
 }
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production"
+    ? { rejectUnauthorized: false }
+    : false,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
+  max: 10
+});
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://roomify-app-simran.netlify.app",
+  process.env.CLIENT_ORIGIN
+].filter(Boolean);
 
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || "http://localhost:5173"
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Origin not allowed by CORS"));
+  }
 }));
+
 app.use(express.json({ limit: "15mb" }));
 
-function readDesigns() {
-  return JSON.parse(fs.readFileSync(dataFile, "utf8"));
+// Store each complete design as JSONB in PostgreSQL.
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS designs (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
-function writeDesigns(designs) {
-  fs.writeFileSync(dataFile, JSON.stringify(designs, null, 2));
+function validDesign(design) {
+  return (
+    design &&
+    typeof design === "object" &&
+    !Array.isArray(design) &&
+    typeof design.id === "string" &&
+    design.id.trim().length > 0 &&
+    design.id.length <= 200 &&
+    typeof design.name === "string" &&
+    design.name.trim().length > 0 &&
+    design.name.length <= 200 &&
+    Array.isArray(design.elements)
+  );
 }
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+app.get("/api/health", async (req, res, next) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", database: "connected" });
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.get("/api/designs", (req, res) => {
-  res.json(readDesigns());
+app.get("/api/designs", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT data FROM designs ORDER BY updated_at DESC"
+    );
+    res.json(result.rows.map(row => row.data));
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.get("/api/designs/:id", (req, res) => {
-  const design = readDesigns().find(
-    item => item.id === req.params.id
-  );
+app.get("/api/designs/:id", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT data FROM designs WHERE id = $1",
+      [req.params.id]
+    );
 
-  if (!design) {
-    return res.status(404).json({ error: "Design not found" });
+    if (!result.rowCount) {
+      return res.status(404).json({ error: "Design not found" });
+    }
+
+    res.json(result.rows[0].data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/designs", async (req, res, next) => {
+  try {
+    const design = req.body;
+
+    if (!validDesign(design)) {
+      return res.status(400).json({
+        error: "A valid design with id, name, and elements is required"
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO designs (id, data)
+       VALUES ($1, $2::jsonb)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING data`,
+      [design.id, JSON.stringify(design)]
+    );
+
+    if (!result.rowCount) {
+      return res.status(409).json({ error: "Design already exists" });
+    }
+
+    res.status(201).json(result.rows[0].data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/designs/:id", async (req, res, next) => {
+  try {
+    const changes = req.body;
+
+    if (
+      !changes ||
+      typeof changes !== "object" ||
+      Array.isArray(changes)
+    ) {
+      return res.status(400).json({ error: "Invalid design data" });
+    }
+
+    const existing = await pool.query(
+      "SELECT data FROM designs WHERE id = $1",
+      [req.params.id]
+    );
+
+    if (!existing.rowCount) {
+      return res.status(404).json({ error: "Design not found" });
+    }
+
+    const updated = {
+      ...existing.rows[0].data,
+      ...changes,
+      id: req.params.id,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (!validDesign(updated)) {
+      return res.status(400).json({ error: "Invalid design data" });
+    }
+
+    const result = await pool.query(
+      `UPDATE designs
+       SET data = $2::jsonb, updated_at = NOW()
+       WHERE id = $1
+       RETURNING data`,
+      [req.params.id, JSON.stringify(updated)]
+    );
+
+    res.json(result.rows[0].data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/designs/:id", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM designs WHERE id = $1",
+      [req.params.id]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ error: "Design not found" });
+    }
+
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Consistent JSON error responses.
+app.use((err, req, res, next) => {
+  console.error("API error:", err.message);
+
+  if (res.headersSent) {
+    return next(err);
   }
 
-  res.json(design);
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({ error: "Request body is too large" });
+  }
+
+  if (err instanceof SyntaxError && err.status === 400) {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+
+  if (err.message === "Origin not allowed by CORS") {
+    return res.status(403).json({ error: "Origin not allowed" });
+  }
+
+  res.status(500).json({ error: "Internal server error" });
 });
 
-app.post("/api/designs", (req, res) => {
-  const design = req.body;
-
-  if (!design?.id || !design?.name ||
-      !Array.isArray(design.elements)) {
-    return res.status(400).json({
-      error: "A valid design is required"
+async function startServer() {
+  try {
+    await initializeDatabase();
+    app.listen(PORT, () => {
+      console.log(`Roomify API running on port ${PORT}`);
     });
+  } catch (error) {
+    console.error("Database initialization failed:", error.message);
+    process.exit(1);
   }
+}
 
-  const designs = readDesigns();
-
-  if (designs.some(item => item.id === design.id)) {
-    return res.status(409).json({
-      error: "Design already exists"
-    });
-  }
-
-  designs.unshift(design);
-  writeDesigns(designs);
-
-  res.status(201).json(design);
-});
-
-app.put("/api/designs/:id", (req, res) => {
-  const designs = readDesigns();
-  const index = designs.findIndex(
-    item => item.id === req.params.id
-  );
-
-  if (index === -1) {
-    return res.status(404).json({ error: "Design not found" });
-  }
-
-  designs[index] = {
-    ...designs[index],
-    ...req.body,
-    id: req.params.id,
-    updatedAt: new Date().toISOString()
-  };
-
-  writeDesigns(designs);
-  res.json(designs[index]);
-});
-
-app.delete("/api/designs/:id", (req, res) => {
-  const designs = readDesigns();
-  const remaining = designs.filter(
-    item => item.id !== req.params.id
-  );
-
-  if (remaining.length === designs.length) {
-    return res.status(404).json({ error: "Design not found" });
-  }
-
-  writeDesigns(remaining);
-  res.status(204).end();
-});
-
-app.listen(PORT, () => {
-  console.log(`Roomify API running at http://localhost:${PORT}`);
-});
+startServer();
