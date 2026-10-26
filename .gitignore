@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+server/roomify.db
+server/roomify.db-shm
+server/roomify.db-wal
+
+server/data/designs.json
